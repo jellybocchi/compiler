@@ -10,16 +10,43 @@ typedef struct IRLine {
     struct IRLine *next;
 } IRLine;
 
+typedef struct IRAlloc {
+    void *ptr;
+    struct IRAlloc *next;
+} IRAlloc;
+
 struct IRProgram {
     IRLine *head;
     IRLine *tail;
     SemanticContext *context;
+    IRAlloc *allocs;
     int next_temp_id;
     int next_label_id;
     int failed;
 };
 
-static char *ir_strdup(const char *source) {
+static void *ir_track(IRProgram *program, void *ptr) {
+    IRAlloc *alloc;
+
+    if(ptr == NULL) {
+        return NULL;
+    }
+    if(program == NULL) {
+        return ptr;
+    }
+
+    alloc = (IRAlloc *)malloc(sizeof(IRAlloc));
+    if(alloc == NULL) {
+        fprintf(stderr, "Out of memory.\n");
+        exit(1);
+    }
+    alloc->ptr = ptr;
+    alloc->next = program->allocs;
+    program->allocs = alloc;
+    return ptr;
+}
+
+static char *ir_strdup(IRProgram *program, const char *source) {
     size_t length;
     char *copy;
 
@@ -35,10 +62,10 @@ static char *ir_strdup(const char *source) {
     }
 
     memcpy(copy, source, length + 1);
-    return copy;
+    return (char *)ir_track(program, copy);
 }
 
-static char *ir_format(const char *format, ...) {
+static char *ir_format(IRProgram *program, const char *format, ...) {
     va_list args;
     va_list args_copy;
     int length;
@@ -57,7 +84,7 @@ static char *ir_format(const char *format, ...) {
 
     vsnprintf(buffer, (size_t)length + 1, format, args);
     va_end(args);
-    return buffer;
+    return (char *)ir_track(program, buffer);
 }
 
 static void ir_emit(IRProgram *program, const char *format, ...) {
@@ -106,7 +133,7 @@ static char *ir_new_temp(IRProgram *program) {
 
     snprintf(buffer, sizeof(buffer), "t%d", program->next_temp_id);
     ++program->next_temp_id;
-    return ir_strdup(buffer);
+    return ir_strdup(program, buffer);
 }
 
 static char *ir_new_label(IRProgram *program) {
@@ -114,11 +141,11 @@ static char *ir_new_label(IRProgram *program) {
 
     snprintf(buffer, sizeof(buffer), "label%d", program->next_label_id);
     ++program->next_label_id;
-    return ir_strdup(buffer);
+    return ir_strdup(program, buffer);
 }
 
-static char *ir_const(int value) {
-    return ir_format("#%d", value);
+static char *ir_const(IRProgram *program, int value) {
+    return ir_format(program, "#%d", value);
 }
 
 static int ir_is_constant(const char *operand, int *value) {
@@ -192,7 +219,7 @@ static char *symbol_ir_name(IRProgram *program, const char *name) {
     if(symbol == NULL) {
         return NULL;
     }
-    return ir_strdup(symbol->ir_name);
+    return ir_strdup(program, symbol->ir_name);
 }
 
 static Type *symbol_type(IRProgram *program, const char *name) {
@@ -224,6 +251,7 @@ static void translate_stmt(IRProgram *program, AstNode *stmt);
 static void translate_compst(IRProgram *program, AstNode *comp_st);
 
 static char *fold_binary_constant(
+    IRProgram *program,
     const char *left,
     const char *operator_text,
     const char *right
@@ -249,7 +277,7 @@ static char *fold_binary_constant(
         result = left_value / right_value;
     }
 
-    return ir_const(result);
+    return ir_const(program, result);
 }
 
 static char *translate_binary(
@@ -268,7 +296,7 @@ static char *translate_binary(
         return NULL;
     }
 
-    folded = fold_binary_constant(left, operator_text, right);
+    folded = fold_binary_constant(program, left, operator_text, right);
     if(folded != NULL) {
         return folded;
     }
@@ -381,7 +409,7 @@ static char *translate_call(IRProgram *program, AstNode *exp) {
         args = ast_child(exp, 2);
         argument = translate_exp(program, ast_child(args, 0));
         ir_emit(program, "WRITE %s", argument);
-        return ir_const(0);
+        return ir_const(program, 0);
     }
 
     if(ast_child_count(exp) == 4) {
@@ -415,7 +443,7 @@ static char *translate_addr(IRProgram *program, AstNode *exp) {
             return ir_name;
         }
         if(type_is_ir_array(type)) {
-            return ir_format("&%s", ir_name);
+            return ir_format(program, "&%s", ir_name);
         }
 
         ir_fail(
@@ -494,7 +522,7 @@ static char *translate_exp(IRProgram *program, AstNode *exp) {
                 return symbol_ir_name(program, name);
             }
             if(type_is_ir_array(type)) {
-                return ir_format("&%s", symbol_ir_name(program, name));
+                return ir_format(program, "&%s", symbol_ir_name(program, name));
             }
             ir_fail(
                 program,
@@ -504,7 +532,7 @@ static char *translate_exp(IRProgram *program, AstNode *exp) {
         }
 
         if(ast_is_name(first, "INT")) {
-            return ir_const(ast_int(first));
+            return ir_const(program, ast_int(first));
         }
 
         ir_fail(
@@ -525,7 +553,7 @@ static char *translate_exp(IRProgram *program, AstNode *exp) {
 
         if(ast_is_name(first, "MINUS")) {
             if(ir_is_constant(value, &constant_value)) {
-                return ir_const(-constant_value);
+                return ir_const(program, -constant_value);
             }
 
             {
@@ -961,6 +989,8 @@ void ir_print_program(FILE *output, const IRProgram *program) {
 void ir_program_free(IRProgram *program) {
     IRLine *line;
     IRLine *next_line;
+    IRAlloc *alloc;
+    IRAlloc *next_alloc;
 
     if(program == NULL) {
         return;
@@ -972,6 +1002,14 @@ void ir_program_free(IRProgram *program) {
         free(line->text);
         free(line);
         line = next_line;
+    }
+
+    alloc = program->allocs;
+    while(alloc != NULL) {
+        next_alloc = alloc->next;
+        free(alloc->ptr);
+        free(alloc);
+        alloc = next_alloc;
     }
 
     free(program);

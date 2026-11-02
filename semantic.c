@@ -17,14 +17,16 @@ static Type basic_int_type = {
     TYPE_BASIC,
     4,
     NULL,
-    { .basic = BASIC_INT }
+    { .basic = BASIC_INT },
+    NULL
 };
 
 static Type basic_float_type = {
     TYPE_BASIC,
     4,
     NULL,
-    { .basic = BASIC_FLOAT }
+    { .basic = BASIC_FLOAT },
+    NULL
 };
 
 static char *semantic_strdup(const char *source) {
@@ -46,7 +48,11 @@ static char *semantic_strdup(const char *source) {
     return copy;
 }
 
-static Type *type_new_array(Type *element, int length) {
+static Type *type_new_array(
+    SemanticContext *context,
+    Type *element,
+    int length
+) {
     Type *type;
 
     type = (Type *)calloc(1, sizeof(Type));
@@ -59,6 +65,8 @@ static Type *type_new_array(Type *element, int length) {
     type->info.array.element = element;
     type->info.array.length = length;
     type->size = semantic_type_size(element) * length;
+    type->alloc_next = context->allocated_types;
+    context->allocated_types = type;
     return type;
 }
 
@@ -99,6 +107,8 @@ static Type *type_new_structure(
     for(field = fields; field != NULL; field = field->next) {
         type->size += semantic_type_size(field->type);
     }
+    type->alloc_next = context->allocated_types;
+    context->allocated_types = type;
     return type;
 }
 
@@ -331,6 +341,7 @@ static void collect_var_dec(
 }
 
 static Type *build_var_type(
+    SemanticContext *context,
     Type *base_type,
     AstNode *var_dec,
     const char **name,
@@ -346,7 +357,7 @@ static Type *build_var_type(
 
     type = base_type;
     for(i = dimension_count - 1; i >= 0; --i) {
-        type = type_new_array(type, dimensions[i]);
+        type = type_new_array(context, type, dimensions[i]);
     }
     return type;
 }
@@ -491,7 +502,7 @@ static Field *analyze_var_list(SemanticContext *context, AstNode *var_list) {
     var_dec = ast_child(param_dec, 1);
     name = NULL;
     line = param_dec->line;
-    type = build_var_type(analyze_specifier(context, specifier), var_dec, &name, &line);
+    type = build_var_type(context, analyze_specifier(context, specifier), var_dec, &name, &line);
     if(type != NULL && name != NULL) {
         declare_variable(context, name, type, line);
         head = field_new(name, type, line);
@@ -624,7 +635,7 @@ static Field *analyze_dec_list(
 
     if(ast_child_count(dec) == 1) {
         var_dec = ast_child(dec, 0);
-        type = build_var_type(specifier_type, var_dec, &name, &line);
+        type = build_var_type(context, specifier_type, var_dec, &name, &line);
         if(name != NULL) {
             if(in_structure) {
                 field = field_new(name, type, line);
@@ -636,7 +647,7 @@ static Field *analyze_dec_list(
     } else {
         var_dec = ast_child(dec, 0);
         exp = ast_child(dec, 2);
-        type = build_var_type(specifier_type, var_dec, &name, &line);
+        type = build_var_type(context, specifier_type, var_dec, &name, &line);
         if(in_structure) {
             report_named_error(15, dec->line, "Initialized field", name);
             if(name != NULL) {
@@ -1152,7 +1163,7 @@ static void analyze_ext_dec_list(
     name = NULL;
     line = ext_dec_list->line;
     var_dec = ast_child(ext_dec_list, 0);
-    type = build_var_type(specifier_type, var_dec, &name, &line);
+    type = build_var_type(context, specifier_type, var_dec, &name, &line);
     if(name != NULL) {
         declare_variable(context, name, type, line);
     }
@@ -1260,6 +1271,10 @@ void semantic_context_free(SemanticContext *context) {
     Symbol *next_symbol;
     FunctionSymbol *function;
     FunctionSymbol *next_function;
+    Type *type;
+    Type *next_type;
+    Field *field;
+    Field *next_field;
 
     if(context == NULL) {
         return;
@@ -1278,8 +1293,32 @@ void semantic_context_free(SemanticContext *context) {
     while(function != NULL) {
         next_function = function->next;
         free(function->name);
+        field = function->params;
+        while(field != NULL) {
+            next_field = field->next;
+            free(field->name);
+            free(field);
+            field = next_field;
+        }
         free(function);
         function = next_function;
+    }
+
+    type = context->allocated_types;
+    while(type != NULL) {
+        next_type = type->alloc_next;
+        if(type->kind == TYPE_STRUCT) {
+            field = type->info.structure.fields;
+            while(field != NULL) {
+                next_field = field->next;
+                free(field->name);
+                free(field);
+                field = next_field;
+            }
+            free(type->info.structure.name);
+        }
+        free(type);
+        type = next_type;
     }
 
     free(context);

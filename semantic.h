@@ -43,6 +43,7 @@ struct Type {
             int anonymous_id;
         } structure;
     } info;
+    Type *alloc_next;
 };
 
 struct Symbol {
@@ -66,6 +67,7 @@ struct SemanticContext {
     Symbol *variables;
     FunctionSymbol *functions;
     Type *structures;
+    Type *allocated_types;
     int next_anonymous_struct_id;
     int next_ir_var_id;
 };

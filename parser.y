@@ -30,6 +30,13 @@ void yyerror(const char *message);
 %type <node> VarDec FunDec VarList ParamDec CompSt StmtList Stmt DefList Def DecList Dec
 %type <node> Exp Args
 
+%destructor { ast_free($$); } INT FLOAT ID TYPE
+%destructor { ast_free($$); } SEMI COMMA ASSIGNOP RELOP PLUS MINUS STAR DIV AND OR DOT NOT
+%destructor { ast_free($$); } LP RP LB RB LC RC
+%destructor { ast_free($$); } STRUCT RETURN IF ELSE WHILE
+%destructor { ast_free($$); } ExtDefList ExtDef ExtDecList Specifier StructSpecifier OptTag Tag
+%destructor { ast_free($$); } VarDec FunDec VarList ParamDec CompSt StmtList Stmt DefList Def DecList Dec Exp Args
+
 %nonassoc LOWER_THAN_ELSE
 %nonassoc ELSE
 %right ASSIGNOP
@@ -42,6 +49,8 @@ void yyerror(const char *message);
 %left LP RP LB RB DOT
 
 %start Program
+
+%expect 2
 
 %%
 
@@ -70,6 +79,7 @@ ExtDef
     | error SEMI
       {
           yyerrok;
+          ast_free($2);
           $$ = NULL;
       }
     ;
@@ -139,6 +149,8 @@ CompSt
     | LC error RC
       {
           yyerrok;
+          ast_free($1);
+          ast_free($3);
           $$ = NULL;
       }
     ;
@@ -166,6 +178,7 @@ Stmt
     | error SEMI
       {
           yyerrok;
+          ast_free($2);
           $$ = NULL;
       }
     ;
@@ -183,6 +196,7 @@ Def
     | error SEMI
       {
           yyerrok;
+          ast_free($2);
           $$ = NULL;
       }
     ;
